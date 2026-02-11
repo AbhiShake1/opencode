@@ -9,8 +9,9 @@ import type {
   Message,
   Part,
   Auth,
-  Config,
+  Config as SDKConfig,
 } from "@opencode-ai/sdk"
+import type { createOpencodeClient as createOpencodeClientV2, Event as TuiEvent } from "@opencode-ai/sdk/v2"
 
 import type { BunShell } from "./shell"
 import { type ToolDefinition } from "./tool"
@@ -32,7 +33,31 @@ export type PluginInput = {
   $: BunShell
 }
 
-export type Plugin = (input: PluginInput) => Promise<Hooks>
+export type PluginOptions = Record<string, unknown>
+
+export type Config = Omit<SDKConfig, "plugin"> & {
+  plugin?: Array<string | [string, PluginOptions]>
+}
+
+export type Plugin = (input: PluginInput, options?: PluginOptions) => Promise<Hooks>
+
+export type TuiEventBus = {
+  on: <Type extends TuiEvent["type"]>(
+    type: Type,
+    handler: (event: Extract<TuiEvent, { type: Type }>) => void,
+  ) => () => void
+}
+
+export type TuiPluginInput = {
+  client: ReturnType<typeof createOpencodeClientV2>
+  event: TuiEventBus
+  url: string
+  directory?: string
+}
+
+export type TuiPlugin = (input: TuiPluginInput, options?: PluginOptions) => Promise<void>
+
+export type PluginModule = Plugin | { server?: Plugin; tui?: TuiPlugin }
 
 export type AuthHook = {
   provider: string

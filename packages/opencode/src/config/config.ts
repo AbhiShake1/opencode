@@ -34,6 +34,11 @@ import { iife } from "@/util/iife"
 
 export namespace Config {
   const ModelId = z.string().meta({ $ref: "https://models.dev/model-schema.json#/$defs/Model" })
+  const PluginOptions = z.record(z.string(), z.unknown())
+  const PluginSpec = z.union([z.string(), z.tuple([z.string(), PluginOptions])])
+
+  export type PluginOptions = z.infer<typeof PluginOptions>
+  export type PluginSpec = z.infer<typeof PluginSpec>
 
   const log = Log.create({ service: "config" })
 
@@ -56,7 +61,7 @@ export namespace Config {
   function mergeConfigConcatArrays(target: Info, source: Info): Info {
     const merged = mergeDeep(target, source)
     if (target.plugin && source.plugin) {
-      merged.plugin = Array.from(new Set([...target.plugin, ...source.plugin]))
+      merged.plugin = [...target.plugin, ...source.plugin]
     }
     if (target.instructions && source.instructions) {
       merged.instructions = Array.from(new Set([...target.instructions, ...source.instructions]))
@@ -478,15 +483,35 @@ export namespace Config {
    * getPluginName("oh-my-opencode@2.4.3") // "oh-my-opencode"
    * getPluginName("@scope/pkg@1.0.0") // "@scope/pkg"
    */
-  export function getPluginName(plugin: string): string {
-    if (plugin.startsWith("file://")) {
-      return path.parse(new URL(plugin).pathname).name
+  export function pluginSpecifier(plugin: PluginSpec): string {
+    return Array.isArray(plugin) ? plugin[0] : plugin
+  }
+
+  export function pluginOptions(plugin: PluginSpec): PluginOptions | undefined {
+    return Array.isArray(plugin) ? plugin[1] : undefined
+  }
+
+  export function getPluginName(plugin: PluginSpec): string {
+    const spec = pluginSpecifier(plugin)
+    if (spec.startsWith("file://")) {
+      return path.parse(new URL(spec).pathname).name
     }
-    const lastAt = plugin.lastIndexOf("@")
+    const lastAt = spec.lastIndexOf("@")
     if (lastAt > 0) {
-      return plugin.substring(0, lastAt)
+      return spec.substring(0, lastAt)
     }
-    return plugin
+    return spec
+  }
+
+  function resolvePluginSpec(plugin: PluginSpec, configFilepath: string): PluginSpec {
+    const spec = pluginSpecifier(plugin)
+    try {
+      const resolved = import.meta.resolve!(spec, configFilepath)
+      if (Array.isArray(plugin)) return [resolved, plugin[1]]
+      return resolved
+    } catch {
+      return plugin
+    }
   }
 
   /**
@@ -500,14 +525,14 @@ export namespace Config {
    * Since plugins are added in low-to-high priority order,
    * we reverse, deduplicate (keeping first occurrence), then restore order.
    */
-  export function deduplicatePlugins(plugins: string[]): string[] {
+  export function deduplicatePlugins(plugins: PluginSpec[]): PluginSpec[] {
     // seenNames: canonical plugin names for duplicate detection
     // e.g., "oh-my-opencode", "@scope/pkg"
     const seenNames = new Set<string>()
 
     // uniqueSpecifiers: full plugin specifiers to return
-    // e.g., "oh-my-opencode@2.4.3", "file:///path/to/plugin.js"
-    const uniqueSpecifiers: string[] = []
+    // e.g., "oh-my-opencode@2.4.3", ["file:///path/to/plugin.js", { ... }]
+    const uniqueSpecifiers: PluginSpec[] = []
 
     for (const specifier of plugins.toReversed()) {
       const name = getPluginName(specifier)
@@ -1019,7 +1044,7 @@ export namespace Config {
           ignore: z.array(z.string()).optional(),
         })
         .optional(),
-      plugin: z.string().array().optional(),
+      plugin: PluginSpec.array().optional(),
       snapshot: z.boolean().optional(),
       share: z
         .enum(["manual", "auto", "disabled"])
@@ -1317,10 +1342,7 @@ export namespace Config {
       const data = parsed.data
       if (data.plugin) {
         for (let i = 0; i < data.plugin.length; i++) {
-          const plugin = data.plugin[i]
-          try {
-            data.plugin[i] = import.meta.resolve!(plugin, configFilepath)
-          } catch (err) {}
+          data.plugin[i] = resolvePluginSpec(data.plugin[i], configFilepath)
         }
       }
       return data
