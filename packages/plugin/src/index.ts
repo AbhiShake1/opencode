@@ -39,6 +39,24 @@ export type Config = Omit<SDKConfig, "plugin"> & {
   plugin?: Array<string | [string, PluginOptions]>
 }
 
+type HexColor = `#${string}`
+type RefName = string
+type Variant = {
+  dark: HexColor | RefName | number
+  light: HexColor | RefName | number
+}
+type ThemeColorValue = HexColor | RefName | number | Variant
+
+export type ThemeJson = {
+  $schema?: string
+  defs?: Record<string, HexColor | RefName>
+  theme: Record<string, ThemeColorValue> & {
+    selectedListItemText?: ThemeColorValue
+    backgroundMenu?: ThemeColorValue
+    thinkingOpacity?: number
+  }
+}
+
 export type Plugin = (input: PluginInput, options?: PluginOptions) => Promise<Hooks>
 
 export type TuiEventBus = {
@@ -57,7 +75,7 @@ export type TuiPluginInput = {
 
 export type TuiPlugin = (input: TuiPluginInput, options?: PluginOptions) => Promise<void>
 
-export type PluginModule = Plugin | { server?: Plugin; tui?: TuiPlugin }
+export type PluginModule = Plugin | { server?: Plugin; tui?: TuiPlugin; themes?: Record<string, ThemeJson> }
 
 export type AuthHook = {
   provider: string

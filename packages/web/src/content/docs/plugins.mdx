@@ -179,6 +179,37 @@ TUI input includes:
 
 ---
 
+### Themes from plugins
+
+Plugins can register one or more TUI themes. Define them as `themes` on the exported object. The TUI will register them as soon as the plugin module is loaded.
+
+```ts title=".opencode/plugins/theme-pack.ts"
+export const MyPlugin = {
+  themes: {
+    "vault-tec": {
+      theme: {
+        primary: "#5ea9ff",
+        secondary: "#7cff7c",
+        accent: "#ffd06a",
+        // ...all required theme colors
+      },
+    },
+    "vault-tec-light": {
+      theme: {
+        primary: "#1b4b8a",
+        secondary: "#2f8a2f",
+        accent: "#a86a00",
+      },
+    },
+  },
+  tui: async () => {},
+}
+```
+
+Plugin themes are added to the theme list. If a theme name already exists (built‑in or custom), the existing theme takes precedence.
+
+---
+
 ### TypeScript support
 
 For TypeScript plugins, you can import types from the plugin package:

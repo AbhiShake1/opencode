@@ -3,6 +3,7 @@ import { Config } from "@/config/config"
 import { Log } from "@/util/log"
 import { BunProc } from "@/bun"
 import { Instance } from "@/project/instance"
+import { registerThemes } from "./context/theme"
 import { existsSync } from "fs"
 
 export namespace TuiPlugin {
@@ -45,6 +46,13 @@ export namespace TuiPlugin {
           for (const [_name, entry] of Object.entries(mod)) {
             if (seen.has(entry)) continue
             seen.add(entry)
+            const themes = (() => {
+              if (!entry || typeof entry !== "object") return
+              if (!("themes" in entry)) return
+              if (!entry.themes || typeof entry.themes !== "object") return
+              return entry.themes as Record<string, unknown>
+            })()
+            if (themes) registerThemes(themes)
             const tui = (() => {
               if (!entry || typeof entry !== "object") return
               if ("tui" in entry && typeof entry.tui === "function") return entry.tui as TuiPluginFn
