@@ -506,6 +506,7 @@ fn make_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .commands(tauri_specta::collect_commands![
             kill_sidecar,
             cli::install_cli,
+            cli::run_skills_command,
             await_initialization,
             server::get_default_server_url,
             server::set_default_server_url,

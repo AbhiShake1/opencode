@@ -22,6 +22,8 @@ import { FileProvider } from "@/context/file"
 import { CommentsProvider } from "@/context/comments"
 import { NotificationProvider } from "@/context/notification"
 import { ModelsProvider } from "@/context/models"
+import { OpenCodexProvider } from "@/context/opencodex"
+import { SkillsProvider } from "@/context/skills"
 import { DialogProvider } from "@opencode-ai/ui/context/dialog"
 import { CommandProvider } from "@/context/command"
 import { LanguageProvider, useLanguage } from "@/context/language"
@@ -68,21 +70,23 @@ function MarkedProviderWithNativeParser(props: ParentProps) {
 
 function AppShellProviders(props: ParentProps) {
   return (
-    <SettingsProvider>
-      <PermissionProvider>
-        <LayoutProvider>
-          <NotificationProvider>
-            <ModelsProvider>
-              <CommandProvider>
-                <HighlightsProvider>
-                  <Layout>{props.children}</Layout>
-                </HighlightsProvider>
-              </CommandProvider>
-            </ModelsProvider>
-          </NotificationProvider>
-        </LayoutProvider>
-      </PermissionProvider>
-    </SettingsProvider>
+    <SkillsProvider>
+      <SettingsProvider>
+        <PermissionProvider>
+          <LayoutProvider>
+            <NotificationProvider>
+              <ModelsProvider>
+                <CommandProvider>
+                  <HighlightsProvider>
+                    <Layout>{props.children}</Layout>
+                  </HighlightsProvider>
+                </CommandProvider>
+              </ModelsProvider>
+            </NotificationProvider>
+          </LayoutProvider>
+        </PermissionProvider>
+      </SettingsProvider>
+    </SkillsProvider>
   )
 }
 
@@ -177,17 +181,19 @@ export function AppInterface(props: { defaultUrl?: string; children?: JSX.Elemen
     <ServerProvider defaultUrl={defaultServerUrl} isSidecar={props.isSidecar}>
       <ServerKey>
         <GlobalSDKProvider>
-          <GlobalSyncProvider>
-            <Router
-              root={(routerProps) => <RouterRoot appChildren={props.children}>{routerProps.children}</RouterRoot>}
-            >
-              <Route path="/" component={HomeRoute} />
-              <Route path="/:dir" component={DirectoryLayout}>
-                <Route path="/" component={SessionIndexRoute} />
-                <Route path="/session/:id?" component={SessionRoute} />
-              </Route>
-            </Router>
-          </GlobalSyncProvider>
+          <OpenCodexProvider>
+            <GlobalSyncProvider>
+              <Router
+                root={(routerProps) => <RouterRoot appChildren={props.children}>{routerProps.children}</RouterRoot>}
+              >
+                <Route path="/" component={HomeRoute} />
+                <Route path="/:dir" component={DirectoryLayout}>
+                  <Route path="/" component={SessionIndexRoute} />
+                  <Route path="/session/:id?" component={SessionRoute} />
+                </Route>
+              </Router>
+            </GlobalSyncProvider>
+          </OpenCodexProvider>
         </GlobalSDKProvider>
       </ServerKey>
     </ServerProvider>

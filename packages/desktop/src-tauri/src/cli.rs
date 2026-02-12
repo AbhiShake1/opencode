@@ -25,6 +25,128 @@ pub struct Config {
     pub server: Option<ServerConfig>,
 }
 
+#[derive(serde::Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillsAction {
+    List,
+    Find,
+    Add,
+    Remove,
+    Check,
+    Update,
+}
+
+#[derive(serde::Deserialize, specta::Type)]
+pub struct SkillsCommandInput {
+    pub action: SkillsAction,
+    pub query: Option<String>,
+    pub source: Option<String>,
+    pub skills: Option<Vec<String>>,
+    pub agents: Option<Vec<String>>,
+    pub global: Option<bool>,
+    pub yes: Option<bool>,
+}
+
+#[derive(serde::Serialize, specta::Type)]
+pub struct SkillsCommandResult {
+    pub command: Vec<String>,
+    pub stdout: String,
+    pub stderr: String,
+    pub status: i32,
+}
+
+fn append_skills_args(args: &mut Vec<String>, input: &SkillsCommandInput) {
+    if input.global.unwrap_or(false) {
+        args.push("--global".to_string());
+    }
+
+    if input.yes.unwrap_or(false) {
+        args.push("--yes".to_string());
+    }
+
+    if let Some(skills) = &input.skills {
+        for skill in skills {
+            args.push("--skill".to_string());
+            args.push(skill.clone());
+        }
+    }
+
+    if let Some(agents) = &input.agents {
+        for agent in agents {
+            args.push("--agent".to_string());
+            args.push(agent.clone());
+        }
+    }
+}
+
+fn build_skills_command(input: &SkillsCommandInput) -> Result<Vec<String>, String> {
+    let mut args = vec!["npx".to_string(), "-y".to_string(), "skills".to_string()];
+
+    match input.action {
+        SkillsAction::List => {
+            args.push("list".to_string());
+            append_skills_args(&mut args, input);
+        }
+        SkillsAction::Check => {
+            args.push("check".to_string());
+            append_skills_args(&mut args, input);
+        }
+        SkillsAction::Update => {
+            args.push("update".to_string());
+            append_skills_args(&mut args, input);
+        }
+        SkillsAction::Find => {
+            args.push("find".to_string());
+            let query = input
+                .query
+                .as_ref()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+                .ok_or_else(|| "find requires a query for non-interactive usage".to_string())?;
+            args.push(query);
+        }
+        SkillsAction::Add => {
+            args.push("add".to_string());
+            let source = input
+                .source
+                .as_ref()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+                .ok_or_else(|| "add requires a source (for example: vercel-labs/agent-skills)".to_string())?;
+            args.push(source);
+            append_skills_args(&mut args, input);
+        }
+        SkillsAction::Remove => {
+            args.push("remove".to_string());
+            if let Some(skills) = &input.skills {
+                for skill in skills {
+                    args.push(skill.clone());
+                }
+            }
+            append_skills_args(&mut args, input);
+        }
+    }
+
+    Ok(args)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn run_skills_command(input: SkillsCommandInput) -> Result<SkillsCommandResult, String> {
+    let args = build_skills_command(&input)?;
+    let output = std::process::Command::new(&args[0])
+        .args(&args[1..])
+        .output()
+        .map_err(|e| format!("failed to execute skills command: {}", e))?;
+
+    Ok(SkillsCommandResult {
+        command: args,
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        status: output.status.code().unwrap_or(-1),
+    })
+}
+
 pub async fn get_config(app: &AppHandle) -> Option<Config> {
     let (events, _) = spawn_command(app, "debug config", &[]).ok()?;
 

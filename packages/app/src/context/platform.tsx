@@ -7,6 +7,22 @@ type OpenDirectoryPickerOptions = { title?: string; multiple?: boolean }
 type OpenFilePickerOptions = { title?: string; multiple?: boolean }
 type SaveFilePickerOptions = { title?: string; defaultPath?: string }
 type UpdateInfo = { updateAvailable: boolean; version?: string }
+type SkillsCommandAction = "list" | "find" | "add" | "remove" | "check" | "update"
+type SkillsCommandInput = {
+  action: SkillsCommandAction
+  query?: string
+  source?: string
+  skills?: string[]
+  agents?: string[]
+  global?: boolean
+  yes?: boolean
+}
+type SkillsCommandResult = {
+  command: string[]
+  stdout: string
+  stderr: string
+  status: number
+}
 
 export type Platform = {
   /** Platform discriminator */
@@ -86,6 +102,9 @@ export type Platform = {
 
   /** Read image from clipboard (desktop only) */
   readClipboardImage?(): Promise<File | null>
+
+  /** Run a non-interactive skills.sh CLI action (desktop only) */
+  runSkillsCommand?(input: SkillsCommandInput): Promise<SkillsCommandResult>
 }
 
 export type DisplayBackend = "auto" | "wayland"

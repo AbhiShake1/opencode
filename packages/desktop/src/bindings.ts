@@ -7,6 +7,7 @@ import * as __TAURI_EVENT from "@tauri-apps/api/event";
 export const commands = {
 	killSidecar: () => __TAURI_INVOKE<void>("kill_sidecar"),
 	installCli: () => __TAURI_INVOKE<string>("install_cli"),
+	runSkillsCommand: (input: SkillsCommandInput) => __TAURI_INVOKE<SkillsCommandResult>("run_skills_command", { input }),
 	awaitInitialization: (events: Channel) => __TAURI_INVOKE<ServerReadyData>("await_initialization", { events }),
 	getDefaultServerUrl: () => __TAURI_INVOKE<string | null>("get_default_server_url"),
 	setDefaultServerUrl: (url: string | null) => __TAURI_INVOKE<null>("set_default_server_url", { url }),
@@ -36,6 +37,25 @@ export type LoadingWindowComplete = null;
 export type ServerReadyData = {
 		url: string,
 		password: string | null,
+	};
+
+export type SkillsAction = "list" | "find" | "add" | "remove" | "check" | "update";
+
+export type SkillsCommandInput = {
+		action: SkillsAction,
+		query: string | null,
+		source: string | null,
+		skills: string[] | null,
+		agents: string[] | null,
+		global: boolean | null,
+		yes: boolean | null,
+	};
+
+export type SkillsCommandResult = {
+		command: string[],
+		stdout: string,
+		stderr: string,
+		status: number,
 	};
 
 export type SqliteMigrationProgress = { type: "InProgress"; value: number } | { type: "Done" };

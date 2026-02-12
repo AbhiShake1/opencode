@@ -389,6 +389,10 @@ const createPlatform = (password: Accessor<string | null>): Platform => {
 
     parseMarkdown: (markdown: string) => commands.parseMarkdownCommand(markdown),
 
+    runSkillsCommand: async (input) => {
+      return commands.runSkillsCommand(input)
+    },
+
     webviewZoom,
 
     checkAppExists: async (appName: string) => {

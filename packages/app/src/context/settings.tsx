@@ -15,6 +15,11 @@ export interface SoundSettings {
   errors: string
 }
 
+export interface PersonalizationSettings {
+  personality: "pragmatic" | "helpful" | "thorough"
+  instructions: string
+}
+
 export interface Settings {
   general: {
     autoSave: boolean
@@ -33,6 +38,7 @@ export interface Settings {
   }
   notifications: NotificationSettings
   sounds: SoundSettings
+  personalization: PersonalizationSettings
 }
 
 const defaultSettings: Settings = {
@@ -60,6 +66,10 @@ const defaultSettings: Settings = {
     agent: "staplebops-01",
     permissions: "staplebops-02",
     errors: "nope-03",
+  },
+  personalization: {
+    personality: "pragmatic",
+    instructions: "",
   },
 }
 
@@ -179,6 +189,22 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         errors: withFallback(() => store.sounds?.errors, defaultSettings.sounds.errors),
         setErrors(value: string) {
           setStore("sounds", "errors", value)
+        },
+      },
+      personalization: {
+        personality: withFallback(
+          () => store.personalization?.personality,
+          defaultSettings.personalization.personality,
+        ),
+        setPersonality(value: PersonalizationSettings["personality"]) {
+          setStore("personalization", "personality", value)
+        },
+        instructions: withFallback(
+          () => store.personalization?.instructions,
+          defaultSettings.personalization.instructions,
+        ),
+        setInstructions(value: string) {
+          setStore("personalization", "instructions", value)
         },
       },
     }
