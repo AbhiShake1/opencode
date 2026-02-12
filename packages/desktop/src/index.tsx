@@ -390,7 +390,15 @@ const createPlatform = (password: Accessor<string | null>): Platform => {
     parseMarkdown: (markdown: string) => commands.parseMarkdownCommand(markdown),
 
     runSkillsCommand: async (input) => {
-      return commands.runSkillsCommand(input)
+      return commands.runSkillsCommand({
+        action: input.action,
+        query: input.query ?? null,
+        source: input.source ?? null,
+        skills: input.skills ?? null,
+        agents: input.agents ?? null,
+        global: input.global ?? null,
+        yes: input.yes ?? null,
+      })
     },
 
     webviewZoom,
