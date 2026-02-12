@@ -9,6 +9,7 @@ import { DiffChanges } from "@opencode-ai/ui/diff-changes"
 import { HoverCard } from "@opencode-ai/ui/hover-card"
 import { Icon } from "@opencode-ai/ui/icon"
 import { IconButton } from "@opencode-ai/ui/icon-button"
+import { ContextMenu } from "@opencode-ai/ui/context-menu"
 import { MessageNav } from "@opencode-ai/ui/message-nav"
 import { Spinner } from "@opencode-ai/ui/spinner"
 import { Tooltip } from "@opencode-ai/ui/tooltip"
@@ -68,6 +69,7 @@ export type SessionItemProps = {
   clearHoverProjectSoon: () => void
   prefetchSession: (session: Session, priority?: "high" | "low") => void
   archiveSession: (session: Session) => Promise<void>
+  unarchiveSession?: (session: Session) => Promise<void>
 }
 
 const SessionRow = (props: {
@@ -229,6 +231,9 @@ export const SessionItem = (props: SessionItemProps): JSX.Element => {
   const hoverAllowed = createMemo(() => !props.mobile && props.sidebarExpanded())
   const hoverEnabled = createMemo(() => (props.popover ?? true) && hoverAllowed())
   const isActive = createMemo(() => props.session.id === params.id)
+  const archived = createMemo(() => (props.session.time.archived ?? 0) > 0)
+  const archiveLabel = createMemo(() => (archived() ? language.t("common.unarchive") : language.t("common.archive")))
+  const archiveIcon = createMemo(() => (archived() ? "arrow-up" : "archive"))
 
   const hoverPrefetch = { current: undefined as ReturnType<typeof setTimeout> | undefined }
   const cancelHoverPrefetch = () => {
@@ -251,6 +256,16 @@ export const SessionItem = (props: SessionItemProps): JSX.Element => {
     const text = parts.find((part): part is TextPart => part?.type === "text" && !part.synthetic && !part.ignored)
     return text?.text
   }
+
+  const updateArchive = () => {
+    if (archived()) {
+      if (!props.unarchiveSession) return
+      void props.unarchiveSession(props.session)
+      return
+    }
+    void props.archiveSession(props.session)
+  }
+
   const item = (
     <SessionRow
       session={props.session}
@@ -272,68 +287,78 @@ export const SessionItem = (props: SessionItemProps): JSX.Element => {
   )
 
   return (
-    <div
-      data-session-id={props.session.id}
-      class="group/session relative w-full rounded-md cursor-default transition-colors pl-2 pr-3
-             hover:bg-surface-raised-base-hover [&:has(:focus-visible)]:bg-surface-raised-base-hover has-[[data-expanded]]:bg-surface-raised-base-hover has-[.active]:bg-surface-base-active"
-    >
-      <Show
-        when={hoverEnabled()}
-        fallback={
-          <Tooltip placement={props.mobile ? "bottom" : "right"} value={props.session.title} gutter={10}>
-            {item}
-          </Tooltip>
-        }
+    <ContextMenu modal={!props.sidebarHovering()}>
+      <ContextMenu.Trigger
+        as="div"
+        data-session-id={props.session.id}
+        class="group/session relative w-full rounded-md cursor-default transition-colors pl-2 pr-3
+               hover:bg-surface-raised-base-hover [&:has(:focus-visible)]:bg-surface-raised-base-hover has-[[data-expanded]]:bg-surface-raised-base-hover has-[.active]:bg-surface-base-active"
       >
-        <SessionHoverPreview
-          mobile={props.mobile}
-          nav={props.nav}
-          hoverSession={props.hoverSession}
-          session={props.session}
-          sidebarHovering={props.sidebarHovering}
-          hoverReady={hoverReady}
-          hoverMessages={hoverMessages}
-          language={language}
-          isActive={isActive}
-          slug={props.slug}
-          setHoverSession={props.setHoverSession}
-          messageLabel={messageLabel}
-          onMessageSelect={(message) => {
-            if (!isActive()) {
-              layout.pendingMessage.set(`${base64Encode(props.session.directory)}/${props.session.id}`, message.id)
-              navigate(`${props.slug}/session/${props.session.id}`)
-              return
-            }
-            window.history.replaceState(null, "", `#message-${message.id}`)
-            window.dispatchEvent(new HashChangeEvent("hashchange"))
-          }}
-          trigger={item}
-        />
-      </Show>
-      <div
-        class={`absolute ${props.dense ? "top-0.5 right-0.5" : "top-1 right-1"} flex items-center gap-0.5 transition-opacity`}
-        classList={{
-          "opacity-100 pointer-events-auto": !!props.mobile,
-          "opacity-0 pointer-events-none": !props.mobile,
-          "group-hover/session:opacity-100 group-hover/session:pointer-events-auto": true,
-          "group-focus-within/session:opacity-100 group-focus-within/session:pointer-events-auto": true,
-        }}
-      >
-        <Tooltip value={language.t("common.archive")} placement="top">
-          <IconButton
-            icon="archive"
-            variant="ghost"
-            class="size-6 rounded-md"
-            aria-label={language.t("common.archive")}
-            onClick={(event) => {
-              event.preventDefault()
-              event.stopPropagation()
-              void props.archiveSession(props.session)
+        <Show
+          when={hoverEnabled()}
+          fallback={
+            <Tooltip placement={props.mobile ? "bottom" : "right"} value={props.session.title} gutter={10}>
+              {item}
+            </Tooltip>
+          }
+        >
+          <SessionHoverPreview
+            mobile={props.mobile}
+            nav={props.nav}
+            hoverSession={props.hoverSession}
+            session={props.session}
+            sidebarHovering={props.sidebarHovering}
+            hoverReady={hoverReady}
+            hoverMessages={hoverMessages}
+            language={language}
+            isActive={isActive}
+            slug={props.slug}
+            setHoverSession={props.setHoverSession}
+            messageLabel={messageLabel}
+            onMessageSelect={(message) => {
+              if (!isActive()) {
+                layout.pendingMessage.set(`${base64Encode(props.session.directory)}/${props.session.id}`, message.id)
+                navigate(`${props.slug}/session/${props.session.id}`)
+                return
+              }
+              window.history.replaceState(null, "", `#message-${message.id}`)
+              window.dispatchEvent(new HashChangeEvent("hashchange"))
             }}
+            trigger={item}
           />
-        </Tooltip>
-      </div>
-    </div>
+        </Show>
+        <div
+          class={`absolute ${props.dense ? "top-0.5 right-0.5" : "top-1 right-1"} flex items-center gap-0.5 transition-opacity`}
+          classList={{
+            "opacity-100 pointer-events-auto": !!props.mobile,
+            "opacity-0 pointer-events-none": !props.mobile,
+            "group-hover/session:opacity-100 group-hover/session:pointer-events-auto": true,
+            "group-focus-within/session:opacity-100 group-focus-within/session:pointer-events-auto": true,
+          }}
+        >
+          <Tooltip value={archiveLabel()} placement="top">
+            <IconButton
+              icon={archiveIcon()}
+              variant="ghost"
+              class="size-6 rounded-md"
+              aria-label={archiveLabel()}
+              onClick={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                updateArchive()
+              }}
+            />
+          </Tooltip>
+        </div>
+      </ContextMenu.Trigger>
+      <ContextMenu.Portal mount={!props.mobile ? props.nav() : undefined}>
+        <ContextMenu.Content>
+          <ContextMenu.Item onSelect={updateArchive}>
+            <ContextMenu.ItemLabel>{archiveLabel()}</ContextMenu.ItemLabel>
+          </ContextMenu.Item>
+        </ContextMenu.Content>
+      </ContextMenu.Portal>
+    </ContextMenu>
   )
 }
 

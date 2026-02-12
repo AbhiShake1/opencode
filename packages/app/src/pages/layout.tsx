@@ -13,7 +13,7 @@ import {
   type JSX,
 } from "solid-js"
 import { A, useNavigate, useParams } from "@solidjs/router"
-import { useLayout, LocalProject } from "@/context/layout"
+import { useLayout, LocalProject, type SidebarFilterMode, type SidebarSortMode } from "@/context/layout"
 import { useGlobalSync } from "@/context/global-sync"
 import { Persist, persisted } from "@/utils/persist"
 import { base64Encode } from "@opencode-ai/util/encode"
@@ -61,9 +61,12 @@ import {
   childMapByParent,
   displayName,
   errorMessage,
+  groupChronologicalSessions,
   getDraggableId,
+  sortSessions,
   sortedRootSessions,
   syncWorkspaceOrder,
+  type SessionQuery,
   workspaceKey,
 } from "./layout/helpers"
 import { collectOpenProjectDeepLinks, deepLinkEvent, drainPendingDeepLinks } from "./layout/deep-links"
@@ -74,6 +77,7 @@ import {
   WorkspaceDragOverlay,
   type WorkspaceSidebarContext,
 } from "./layout/sidebar-workspace"
+import { SessionItem, SessionSkeleton } from "./layout/sidebar-items"
 import { workspaceOpenState } from "./layout/sidebar-workspace-helpers"
 import { ProjectDragOverlay, SortableProject, type ProjectSidebarContext } from "./layout/sidebar-project"
 import { SidebarContent } from "./layout/sidebar-shell"
@@ -130,6 +134,10 @@ export default function Layout(props: ParentProps) {
     hoverProject: undefined as string | undefined,
     scrollSessionKey: undefined as string | undefined,
     nav: undefined as HTMLElement | undefined,
+  })
+  const [archived, setArchived] = createStore({
+    loading: {} as Record<string, boolean>,
+    sessions: {} as Record<string, Session[]>,
   })
 
   const editor = createInlineEditorController()
@@ -552,6 +560,18 @@ export default function Layout(props: ParentProps) {
     if (project.vcs !== "git") return false
     return layout.sidebar.workspaces(project.worktree)()
   })
+  const sessionQuery = createMemo<SessionQuery>(() => ({
+    now: sortNow(),
+    sort: layout.sidebar.sort() as SidebarSortMode,
+    filter: layout.sidebar.filter() as SidebarFilterMode,
+    view: layout.sidebar.archived() ? "archived" : "active",
+  }))
+  const activeSessionQuery = createMemo<SessionQuery>(() => ({
+    now: sessionQuery().now,
+    sort: sessionQuery().sort,
+    filter: sessionQuery().filter,
+    view: "active",
+  }))
 
   createEffect(() => {
     if (!pageReady()) return
@@ -594,7 +614,7 @@ export default function Layout(props: ParentProps) {
   const currentSessions = createMemo(() => {
     const project = currentProject()
     if (!project) return [] as Session[]
-    const now = Date.now()
+    const query = sessionQuery()
     if (workspaceSetting()) {
       const dirs = workspaceIds(project)
       const activeDir = currentDir()
@@ -604,14 +624,52 @@ export default function Layout(props: ParentProps) {
         const active = dir === activeDir
         if (!expanded && !active) continue
         const [dirStore] = globalSync.child(dir, { bootstrap: true })
-        const dirSessions = sortedRootSessions(dirStore, now)
+        const dirSessions = sortedRootSessions(dirStore, query)
         result.push(...dirSessions)
       }
-      return result
+      return result.sort(sortSessions(query.sort ?? "updated_desc"))
     }
     const [projectStore] = globalSync.child(project.worktree)
-    return sortedRootSessions(projectStore, now)
+    return sortedRootSessions(projectStore, query)
   })
+
+  const archivedKey = (directory: string) => workspaceKey(directory)
+
+  const sortBySidebar = (sessions: Session[]) => sessions.slice().sort(sortSessions(layout.sidebar.sort()))
+
+  const storeArchived = (directory: string, sessions: Session[]) =>
+    setArchived("sessions", archivedKey(directory), sortBySidebar(sessions))
+
+  const loadArchivedSessions = async (directory: string) => {
+    const key = archivedKey(directory)
+    if (archived.loading[key]) return
+
+    setArchived("loading", key, true)
+    const sessions = await globalSDK.client.session
+      .list({ directory, roots: true, limit: 500 })
+      .then((result) => result.data ?? [])
+      .catch(() => [])
+    setArchived("loading", key, false)
+    storeArchived(
+      directory,
+      sessions.filter((session) => !session.parentID).filter((session) => (session.time.archived ?? 0) > 0),
+    )
+  }
+
+  createEffect(() => {
+    if (!layout.sidebar.archived()) return
+    const project = currentProject()
+    if (!project) return
+
+    for (const directory of workspaceIds(project)) {
+      void loadArchivedSessions(directory)
+    }
+  })
+
+  const archivedSessionsForProject = (project: LocalProject | undefined) => {
+    if (!project) return [] as Session[]
+    return sortBySidebar(workspaceIds(project).flatMap((directory) => archived.sessions[archivedKey(directory)] ?? []))
+  }
 
   type PrefetchQueue = {
     inflight: Set<string>
@@ -887,12 +945,21 @@ export default function Layout(props: ParentProps) {
     const sessions = store.session ?? []
     const index = sessions.findIndex((s) => s.id === session.id)
     const nextSession = sessions[index + 1] ?? sessions[index - 1]
+    const archivedAt = Date.now()
 
     await globalSDK.client.session.update({
       directory: session.directory,
       sessionID: session.id,
-      time: { archived: Date.now() },
+      time: { archived: archivedAt },
     })
+
+    const key = archivedKey(session.directory)
+    const current = archived.sessions[key] ?? []
+    storeArchived(session.directory, [
+      ...current.filter((item) => item.id !== session.id),
+      { ...session, time: { ...session.time, archived: archivedAt } },
+    ])
+
     setStore(
       produce((draft) => {
         const match = Binary.search(draft.session, session.id, (s) => s.id)
@@ -906,6 +973,20 @@ export default function Layout(props: ParentProps) {
         navigate(`/${params.dir}/session`)
       }
     }
+  }
+
+  async function unarchiveSession(session: Session) {
+    await globalSDK.client.session.update({
+      directory: session.directory,
+      sessionID: session.id,
+      time: { archived: 0 },
+    })
+
+    setArchived("sessions", archivedKey(session.directory), (sessions = []) =>
+      sessions.filter((item) => item.id !== session.id),
+    )
+
+    await globalSync.project.loadSessions(session.directory)
   }
 
   command.register("layout", () => {
@@ -1633,6 +1714,7 @@ export default function Layout(props: ParentProps) {
     clearHoverProjectSoon,
     prefetchSession,
     archiveSession,
+    unarchiveSession,
     workspaceName,
     renameWorkspace,
     editorOpen,
@@ -1678,6 +1760,7 @@ export default function Layout(props: ParentProps) {
       clearHoverProjectSoon,
       prefetchSession,
       archiveSession,
+      unarchiveSession,
     },
     setHoverSession,
   }
@@ -1697,6 +1780,58 @@ export default function Layout(props: ParentProps) {
       return layout.sidebar.workspaces(project.worktree)()
     })
     const homedir = createMemo(() => globalSync.data.path.home)
+    const archivedView = createMemo(() => layout.sidebar.archived())
+    const organizeMode = createMemo(() => layout.sidebar.organize())
+    const timelineDirectories = createMemo(() => {
+      const project = panelProps.project
+      if (!project) return [] as string[]
+      if (workspacesEnabled()) return workspaces()
+      return [project.worktree]
+    })
+    const timelineEntries = createMemo(() =>
+      timelineDirectories().map((directory) => {
+        const [store] = globalSync.child(directory, { bootstrap: true })
+        return {
+          directory,
+          store,
+          sessions: sortedRootSessions(store, activeSessionQuery()),
+        }
+      }),
+    )
+    const timelineSessions = createMemo(() => sortBySidebar(timelineEntries().flatMap((entry) => entry.sessions)))
+    const timelineChildren = createMemo(() => childMapByParent(timelineEntries().flatMap((entry) => entry.store.session)))
+    const timelineGroups = createMemo(() => groupChronologicalSessions(timelineSessions(), activeSessionQuery().now))
+    const timelineLoading = createMemo(() =>
+      timelineEntries().some((entry) => entry.store.status !== "complete" && entry.sessions.length === 0),
+    )
+    const timelineHasMore = createMemo(() =>
+      timelineEntries().some((entry) => entry.store.sessionTotal > entry.sessions.length),
+    )
+    const archivedSessions = createMemo(() => archivedSessionsForProject(panelProps.project))
+    const archivedGroups = createMemo(() => groupChronologicalSessions(archivedSessions(), activeSessionQuery().now))
+    const archivedLoading = createMemo(() =>
+      timelineDirectories().some((directory) => archived.loading[archivedKey(directory)]),
+    )
+    const loadTimelineMore = async () => {
+      await Promise.all(
+        timelineDirectories().map(async (directory) => {
+          const [, setStore] = globalSync.child(directory, { bootstrap: false })
+          setStore("limit", (limit) => (limit ?? 0) + 5)
+          await globalSync.project.loadSessions(directory)
+        }),
+      )
+    }
+    createEffect(() => {
+      if (!archivedView()) return
+      for (const directory of timelineDirectories()) {
+        void loadArchivedSessions(directory)
+      }
+    })
+    const sectionLabel = (id: "today" | "yesterday" | "older") => {
+      if (id === "today") return language.t("sidebar.thread.section.today")
+      if (id === "yesterday") return language.t("sidebar.thread.section.yesterday")
+      return language.t("sidebar.thread.section.older")
+    }
 
     return (
       <div
@@ -1737,56 +1872,168 @@ export default function Layout(props: ParentProps) {
                     </Tooltip>
                   </div>
 
-                  <DropdownMenu modal={!sidebarHovering()}>
-                    <DropdownMenu.Trigger
-                      as={IconButton}
-                      icon="dot-grid"
-                      variant="ghost"
-                      data-action="project-menu"
-                      data-project={base64Encode(p().worktree)}
-                      class="shrink-0 size-6 rounded-md data-[expanded]:bg-surface-base-active"
-                      classList={{
-                        "opacity-0 group-hover/project:opacity-100 data-[expanded]:opacity-100": !panelProps.mobile,
-                      }}
-                      aria-label={language.t("common.moreOptions")}
-                    />
-                    <DropdownMenu.Portal mount={!panelProps.mobile ? state.nav : undefined}>
-                      <DropdownMenu.Content class="mt-1">
-                        <DropdownMenu.Item onSelect={() => showEditProjectDialog(p())}>
-                          <DropdownMenu.ItemLabel>{language.t("common.edit")}</DropdownMenu.ItemLabel>
-                        </DropdownMenu.Item>
-                        <DropdownMenu.Item
-                          data-action="project-workspaces-toggle"
-                          data-project={base64Encode(p().worktree)}
-                          disabled={p().vcs !== "git" && !layout.sidebar.workspaces(p().worktree)()}
-                          onSelect={() => toggleProjectWorkspaces(p())}
-                        >
-                          <DropdownMenu.ItemLabel>
-                            {layout.sidebar.workspaces(p().worktree)()
-                              ? language.t("sidebar.workspaces.disable")
-                              : language.t("sidebar.workspaces.enable")}
-                          </DropdownMenu.ItemLabel>
-                        </DropdownMenu.Item>
-                        <DropdownMenu.Separator />
-                        <DropdownMenu.Item
-                          data-action="project-close-menu"
-                          data-project={base64Encode(p().worktree)}
-                          onSelect={() => closeProject(p().worktree)}
-                        >
-                          <DropdownMenu.ItemLabel>{language.t("common.close")}</DropdownMenu.ItemLabel>
-                        </DropdownMenu.Item>
-                      </DropdownMenu.Content>
-                    </DropdownMenu.Portal>
-                  </DropdownMenu>
+                  <div class="flex items-center gap-1 shrink-0">
+                    <DropdownMenu modal={!sidebarHovering()}>
+                      <DropdownMenu.Trigger
+                        as={IconButton}
+                        icon="sliders"
+                        variant="ghost"
+                        data-action="sidebar-thread-controls"
+                        class="shrink-0 size-6 rounded-md data-[expanded]:bg-surface-base-active"
+                        classList={{
+                          "opacity-0 group-hover/project:opacity-100 data-[expanded]:opacity-100": !panelProps.mobile,
+                        }}
+                        aria-label={language.t("sidebar.thread.controls")}
+                      />
+                      <DropdownMenu.Portal mount={!panelProps.mobile ? state.nav : undefined}>
+                        <DropdownMenu.Content class="mt-1">
+                          <DropdownMenu.Group>
+                            <DropdownMenu.GroupLabel>{language.t("sidebar.thread.organize")}</DropdownMenu.GroupLabel>
+                            <DropdownMenu.RadioGroup
+                              value={layout.sidebar.organize()}
+                              onChange={(value) => {
+                                if (value !== "by_project" && value !== "chronological") return
+                                layout.sidebar.setOrganize(value)
+                              }}
+                            >
+                              <DropdownMenu.RadioItem data-action="sidebar-thread-organize" data-value="by_project" value="by_project">
+                                <DropdownMenu.ItemLabel>{language.t("sidebar.thread.organize.byProject")}</DropdownMenu.ItemLabel>
+                                <DropdownMenu.ItemIndicator>
+                                  <Icon name="check-small" size="small" class="text-icon-weak" />
+                                </DropdownMenu.ItemIndicator>
+                              </DropdownMenu.RadioItem>
+                              <DropdownMenu.RadioItem
+                                data-action="sidebar-thread-organize"
+                                data-value="chronological"
+                                value="chronological"
+                              >
+                                <DropdownMenu.ItemLabel>{language.t("sidebar.thread.organize.chronological")}</DropdownMenu.ItemLabel>
+                                <DropdownMenu.ItemIndicator>
+                                  <Icon name="check-small" size="small" class="text-icon-weak" />
+                                </DropdownMenu.ItemIndicator>
+                              </DropdownMenu.RadioItem>
+                            </DropdownMenu.RadioGroup>
+                          </DropdownMenu.Group>
+                          <DropdownMenu.Separator />
+                          <DropdownMenu.Group>
+                            <DropdownMenu.GroupLabel>{language.t("sidebar.thread.sort")}</DropdownMenu.GroupLabel>
+                            <DropdownMenu.RadioGroup
+                              value={layout.sidebar.sort()}
+                              onChange={(value) => {
+                                if (value !== "created_desc" && value !== "updated_desc") return
+                                layout.sidebar.setSort(value)
+                              }}
+                            >
+                              <DropdownMenu.RadioItem data-action="sidebar-thread-sort" data-value="updated_desc" value="updated_desc">
+                                <DropdownMenu.ItemLabel>{language.t("sidebar.thread.sort.updated")}</DropdownMenu.ItemLabel>
+                                <DropdownMenu.ItemIndicator>
+                                  <Icon name="check-small" size="small" class="text-icon-weak" />
+                                </DropdownMenu.ItemIndicator>
+                              </DropdownMenu.RadioItem>
+                              <DropdownMenu.RadioItem data-action="sidebar-thread-sort" data-value="created_desc" value="created_desc">
+                                <DropdownMenu.ItemLabel>{language.t("sidebar.thread.sort.created")}</DropdownMenu.ItemLabel>
+                                <DropdownMenu.ItemIndicator>
+                                  <Icon name="check-small" size="small" class="text-icon-weak" />
+                                </DropdownMenu.ItemIndicator>
+                              </DropdownMenu.RadioItem>
+                            </DropdownMenu.RadioGroup>
+                          </DropdownMenu.Group>
+                          <DropdownMenu.Separator />
+                          <DropdownMenu.Group>
+                            <DropdownMenu.GroupLabel>{language.t("sidebar.thread.filter")}</DropdownMenu.GroupLabel>
+                            <DropdownMenu.RadioGroup
+                              value={layout.sidebar.filter()}
+                              onChange={(value) => {
+                                if (value !== "all" && value !== "relevant") return
+                                layout.sidebar.setFilter(value)
+                              }}
+                            >
+                              <DropdownMenu.RadioItem data-action="sidebar-thread-filter" data-value="all" value="all">
+                                <DropdownMenu.ItemLabel>{language.t("sidebar.thread.filter.all")}</DropdownMenu.ItemLabel>
+                                <DropdownMenu.ItemIndicator>
+                                  <Icon name="check-small" size="small" class="text-icon-weak" />
+                                </DropdownMenu.ItemIndicator>
+                              </DropdownMenu.RadioItem>
+                              <DropdownMenu.RadioItem data-action="sidebar-thread-filter" data-value="relevant" value="relevant">
+                                <DropdownMenu.ItemLabel>{language.t("sidebar.thread.filter.relevant")}</DropdownMenu.ItemLabel>
+                                <DropdownMenu.ItemIndicator>
+                                  <Icon name="check-small" size="small" class="text-icon-weak" />
+                                </DropdownMenu.ItemIndicator>
+                              </DropdownMenu.RadioItem>
+                            </DropdownMenu.RadioGroup>
+                          </DropdownMenu.Group>
+                          <DropdownMenu.Separator />
+                          <DropdownMenu.Item
+                            data-action="sidebar-thread-archived-toggle"
+                            onSelect={() => {
+                              if (layout.sidebar.archived()) {
+                                layout.sidebar.showActive()
+                                return
+                              }
+                              layout.sidebar.showArchived()
+                            }}
+                          >
+                            <DropdownMenu.ItemLabel>
+                              {layout.sidebar.archived()
+                                ? language.t("sidebar.thread.archived.hide")
+                                : language.t("sidebar.thread.archived.show")}
+                            </DropdownMenu.ItemLabel>
+                          </DropdownMenu.Item>
+                        </DropdownMenu.Content>
+                      </DropdownMenu.Portal>
+                    </DropdownMenu>
+
+                    <DropdownMenu modal={!sidebarHovering()}>
+                      <DropdownMenu.Trigger
+                        as={IconButton}
+                        icon="dot-grid"
+                        variant="ghost"
+                        data-action="project-menu"
+                        data-project={base64Encode(p().worktree)}
+                        class="shrink-0 size-6 rounded-md data-[expanded]:bg-surface-base-active"
+                        classList={{
+                          "opacity-0 group-hover/project:opacity-100 data-[expanded]:opacity-100": !panelProps.mobile,
+                        }}
+                        aria-label={language.t("common.moreOptions")}
+                      />
+                      <DropdownMenu.Portal mount={!panelProps.mobile ? state.nav : undefined}>
+                        <DropdownMenu.Content class="mt-1">
+                          <DropdownMenu.Item onSelect={() => showEditProjectDialog(p())}>
+                            <DropdownMenu.ItemLabel>{language.t("common.edit")}</DropdownMenu.ItemLabel>
+                          </DropdownMenu.Item>
+                          <DropdownMenu.Item
+                            data-action="project-workspaces-toggle"
+                            data-project={base64Encode(p().worktree)}
+                            disabled={p().vcs !== "git" && !layout.sidebar.workspaces(p().worktree)()}
+                            onSelect={() => toggleProjectWorkspaces(p())}
+                          >
+                            <DropdownMenu.ItemLabel>
+                              {layout.sidebar.workspaces(p().worktree)()
+                                ? language.t("sidebar.workspaces.disable")
+                                : language.t("sidebar.workspaces.enable")}
+                            </DropdownMenu.ItemLabel>
+                          </DropdownMenu.Item>
+                          <DropdownMenu.Separator />
+                          <DropdownMenu.Item
+                            data-action="project-close-menu"
+                            data-project={base64Encode(p().worktree)}
+                            onSelect={() => closeProject(p().worktree)}
+                          >
+                            <DropdownMenu.ItemLabel>{language.t("common.close")}</DropdownMenu.ItemLabel>
+                          </DropdownMenu.Item>
+                        </DropdownMenu.Content>
+                      </DropdownMenu.Portal>
+                    </DropdownMenu>
+                  </div>
                 </div>
               </div>
 
               <div class="flex-1 min-h-0 flex flex-col">
-                <Show
-                  when={workspacesEnabled()}
-                  fallback={
-                    <>
-                      <div class="shrink-0 py-4 px-3">
+                <Show when={!archivedView()}>
+                  <div class="shrink-0 py-4 px-3">
+                    <Show
+                      when={workspacesEnabled()}
+                      fallback={
                         <TooltipKeybind
                           title={language.t("command.session.new")}
                           keybind={command.keybind("session.new")}
@@ -1801,20 +2048,8 @@ export default function Layout(props: ParentProps) {
                             {language.t("command.session.new")}
                           </Button>
                         </TooltipKeybind>
-                      </div>
-                      <div class="flex-1 min-h-0">
-                        <LocalWorkspace
-                          ctx={workspaceSidebarCtx}
-                          project={p()}
-                          sortNow={sortNow}
-                          mobile={panelProps.mobile}
-                        />
-                      </div>
-                    </>
-                  }
-                >
-                  <>
-                    <div class="shrink-0 py-4 px-3">
+                      }
+                    >
                       <TooltipKeybind
                         title={language.t("workspace.new")}
                         keybind={command.keybind("workspace.new")}
@@ -1824,46 +2059,134 @@ export default function Layout(props: ParentProps) {
                           {language.t("workspace.new")}
                         </Button>
                       </TooltipKeybind>
-                    </div>
-                    <div class="relative flex-1 min-h-0">
-                      <DragDropProvider
-                        onDragStart={handleWorkspaceDragStart}
-                        onDragEnd={handleWorkspaceDragEnd}
-                        onDragOver={handleWorkspaceDragOver}
-                        collisionDetector={closestCenter}
-                      >
-                        <DragDropSensors />
-                        <ConstrainDragXAxis />
+                    </Show>
+                  </div>
+                </Show>
+
+                <Show
+                  when={!archivedView() && workspacesEnabled() && organizeMode() === "by_project"}
+                  fallback={
+                    <Show
+                      when={!archivedView() && !workspacesEnabled() && organizeMode() === "by_project"}
+                      fallback={
                         <div
                           ref={(el) => {
                             if (!panelProps.mobile) scrollContainerRef = el
                           }}
-                          class="size-full flex flex-col py-2 gap-4 overflow-y-auto no-scrollbar [overflow-anchor:none]"
+                          class="size-full flex flex-col py-2 overflow-y-auto no-scrollbar [overflow-anchor:none]"
                         >
-                          <SortableProvider ids={workspaces()}>
-                            <For each={workspaces()}>
-                              {(directory) => (
-                                <SortableWorkspace
-                                  ctx={workspaceSidebarCtx}
-                                  directory={directory}
-                                  project={p()}
-                                  sortNow={sortNow}
-                                  mobile={panelProps.mobile}
-                                />
-                              )}
-                            </For>
-                          </SortableProvider>
+                          <nav class="flex flex-col gap-1 px-2">
+                            <Show when={archivedView() ? archivedLoading() : timelineLoading()}>
+                              <SessionSkeleton />
+                            </Show>
+                            <Show
+                              when={organizeMode() === "chronological" || archivedView()}
+                              fallback={
+                                <For each={timelineSessions()}>
+                                  {(session) => (
+                                    <SessionItem
+                                      {...projectSidebarCtx.sessionProps}
+                                      session={session}
+                                      slug={base64Encode(session.directory)}
+                                      mobile={panelProps.mobile}
+                                      children={timelineChildren()}
+                                    />
+                                  )}
+                                </For>
+                              }
+                            >
+                              <For each={archivedView() ? archivedGroups() : timelineGroups()}>
+                                {(group) => (
+                                  <div class="flex flex-col gap-1 py-1">
+                                    <div class="px-3 py-1 text-12-medium text-text-weak">{sectionLabel(group.id)}</div>
+                                    <For each={group.sessions}>
+                                      {(session) => (
+                                        <SessionItem
+                                          {...projectSidebarCtx.sessionProps}
+                                          session={session}
+                                          slug={base64Encode(session.directory)}
+                                          mobile={panelProps.mobile}
+                                          children={timelineChildren()}
+                                        />
+                                      )}
+                                    </For>
+                                  </div>
+                                )}
+                              </For>
+                            </Show>
+                            <Show when={archivedView() && !archivedLoading() && archivedSessions().length === 0}>
+                              <div class="px-3 py-2 text-12-regular text-text-weak">
+                                {language.t("sidebar.thread.archived.empty")}
+                              </div>
+                            </Show>
+                            <Show when={!archivedView() && timelineHasMore()}>
+                              <div class="relative w-full py-1">
+                                <Button
+                                  variant="ghost"
+                                  class="flex w-full text-left justify-start text-14-regular text-text-weak pl-9 pr-10"
+                                  size="large"
+                                  onClick={(event: MouseEvent) => {
+                                    void loadTimelineMore()
+                                    ;(event.currentTarget as HTMLButtonElement).blur()
+                                  }}
+                                >
+                                  {language.t("common.loadMore")}
+                                </Button>
+                              </div>
+                            </Show>
+                          </nav>
                         </div>
-                        <DragOverlay>
-                          <WorkspaceDragOverlay
-                            sidebarProject={sidebarProject}
-                            activeWorkspace={() => store.activeWorkspace}
-                            workspaceLabel={workspaceLabel}
-                          />
-                        </DragOverlay>
-                      </DragDropProvider>
-                    </div>
-                  </>
+                      }
+                    >
+                      <div class="flex-1 min-h-0">
+                        <LocalWorkspace
+                          ctx={workspaceSidebarCtx}
+                          project={p()}
+                          query={activeSessionQuery}
+                          mobile={panelProps.mobile}
+                        />
+                      </div>
+                    </Show>
+                  }
+                >
+                  <div class="relative flex-1 min-h-0">
+                    <DragDropProvider
+                      onDragStart={handleWorkspaceDragStart}
+                      onDragEnd={handleWorkspaceDragEnd}
+                      onDragOver={handleWorkspaceDragOver}
+                      collisionDetector={closestCenter}
+                    >
+                      <DragDropSensors />
+                      <ConstrainDragXAxis />
+                      <div
+                        ref={(el) => {
+                          if (!panelProps.mobile) scrollContainerRef = el
+                        }}
+                        class="size-full flex flex-col py-2 gap-4 overflow-y-auto no-scrollbar [overflow-anchor:none]"
+                      >
+                        <SortableProvider ids={workspaces()}>
+                          <For each={workspaces()}>
+                            {(directory) => (
+                              <SortableWorkspace
+                                ctx={workspaceSidebarCtx}
+                                directory={directory}
+                                project={p()}
+                                query={activeSessionQuery}
+                                mobile={panelProps.mobile}
+                              />
+                            )}
+                          </For>
+                        </SortableProvider>
+                      </div>
+                      <DragOverlay>
+                        <WorkspaceDragOverlay
+                          sidebarProject={sidebarProject}
+                          activeWorkspace={() => store.activeWorkspace}
+                          workspaceLabel={workspaceLabel}
+                        />
+                      </DragOverlay>
+                    </DragDropProvider>
+                  </div>
                 </Show>
               </div>
             </>
@@ -1934,7 +2257,7 @@ export default function Layout(props: ParentProps) {
               aimMove={aim.move}
               projects={() => layout.projects.list()}
               renderProject={(project) => (
-                <SortableProject ctx={projectSidebarCtx} project={project} sortNow={sortNow} />
+                <SortableProject ctx={projectSidebarCtx} project={project} query={activeSessionQuery} />
               )}
               handleDragStart={handleDragStart}
               handleDragEnd={handleDragEnd}
@@ -1999,7 +2322,7 @@ export default function Layout(props: ParentProps) {
               aimMove={aim.move}
               projects={() => layout.projects.list()}
               renderProject={(project) => (
-                <SortableProject ctx={projectSidebarCtx} project={project} sortNow={sortNow} mobile />
+                <SortableProject ctx={projectSidebarCtx} project={project} query={activeSessionQuery} mobile />
               )}
               handleDragStart={handleDragStart}
               handleDragEnd={handleDragEnd}

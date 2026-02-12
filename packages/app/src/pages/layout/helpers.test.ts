@@ -1,6 +1,15 @@
 import { describe, expect, test } from "bun:test"
 import { collectOpenProjectDeepLinks, drainPendingDeepLinks, parseDeepLink } from "./deep-links"
-import { displayName, errorMessage, getDraggableId, syncWorkspaceOrder, workspaceKey } from "./helpers"
+import {
+  displayName,
+  errorMessage,
+  getDraggableId,
+  groupChronologicalSessions,
+  sessionRelevant,
+  sortedRootSessions,
+  syncWorkspaceOrder,
+  workspaceKey,
+} from "./helpers"
 
 describe("layout deep links", () => {
   test("parses open-project deep links", () => {
@@ -88,5 +97,102 @@ describe("layout workspace helpers", () => {
     expect(errorMessage({ data: { message: "boom" } }, "fallback")).toBe("boom")
     expect(errorMessage(new Error("broken"), "fallback")).toBe("broken")
     expect(errorMessage("unknown", "fallback")).toBe("fallback")
+  })
+})
+
+describe("layout session helpers", () => {
+  const now = new Date("2026-01-10T12:00:00.000Z").getTime()
+
+  const session = (id: string, input: { created: number; updated?: number; archived?: number; summary?: boolean }) => ({
+    id,
+    slug: id,
+    projectID: "p",
+    directory: "/tmp/demo",
+    title: id,
+    version: "1",
+    time: {
+      created: input.created,
+      updated: input.updated ?? input.created,
+      archived: input.archived,
+    },
+    summary: input.summary
+      ? {
+          additions: 1,
+          deletions: 0,
+          files: 1,
+        }
+      : undefined,
+  })
+
+  test("sorts by updated desc with stable id tiebreak", () => {
+    const store = {
+      path: { directory: "/tmp/demo" },
+      session: [
+        session("b", { created: now - 1_000, updated: now - 200 }),
+        session("a", { created: now - 2_000, updated: now - 200 }),
+        session("c", { created: now - 300, updated: now - 300 }),
+      ],
+    }
+
+    const result = sortedRootSessions(store, { now, sort: "updated_desc", filter: "all" })
+    expect(result.map((item) => item.id)).toEqual(["a", "b", "c"])
+  })
+
+  test("sorts by created desc exactly", () => {
+    const store = {
+      path: { directory: "/tmp/demo" },
+      session: [
+        session("a", { created: now - 9_000, updated: now - 100 }),
+        session("b", { created: now - 200, updated: now - 8_000 }),
+      ],
+    }
+
+    const result = sortedRootSessions(store, { now, sort: "created_desc", filter: "all" })
+    expect(result.map((item) => item.id)).toEqual(["b", "a"])
+  })
+
+  test("filters relevant sessions deterministically", () => {
+    const recent = session("recent", { created: now - 100, updated: now - 100 })
+    const withSummary = session("summary", { created: now - 30 * 24 * 60 * 60 * 1000, summary: true })
+    const stale = session("stale", { created: now - 30 * 24 * 60 * 60 * 1000 })
+
+    expect(sessionRelevant(recent, now)).toBe(false)
+    expect(sessionRelevant(withSummary, now)).toBe(true)
+    expect(sessionRelevant(stale, now)).toBe(false)
+
+    const store = {
+      path: { directory: "/tmp/demo" },
+      session: [recent, withSummary, stale],
+    }
+
+    const result = sortedRootSessions(store, { now, sort: "updated_desc", filter: "relevant" })
+    expect(result.map((item) => item.id)).toEqual(["summary"])
+  })
+
+  test("supports archived view separately from active view", () => {
+    const active = session("active", { created: now - 100 })
+    const archived = session("archived", { created: now - 200, archived: now - 50 })
+    const store = {
+      path: { directory: "/tmp/demo" },
+      session: [active, archived],
+    }
+
+    const activeResult = sortedRootSessions(store, { now, sort: "updated_desc", filter: "all", view: "active" })
+    expect(activeResult.map((item) => item.id)).toEqual(["active"])
+
+    const archivedResult = sortedRootSessions(store, { now, sort: "updated_desc", filter: "all", view: "archived" })
+    expect(archivedResult.map((item) => item.id)).toEqual(["archived"])
+  })
+
+  test("groups chronological sessions into today, yesterday, and older buckets", () => {
+    const sessions = [
+      session("t", { created: now - 1_000, updated: now - 1_000 }),
+      session("y", { created: now - 25 * 60 * 60 * 1000, updated: now - 25 * 60 * 60 * 1000 }),
+      session("o", { created: now - 5 * 24 * 60 * 60 * 1000, updated: now - 5 * 24 * 60 * 60 * 1000 }),
+    ]
+
+    const groups = groupChronologicalSessions(sessions, now)
+    expect(groups.map((group) => group.id)).toEqual(["today", "yesterday", "older"])
+    expect(groups.map((group) => group.sessions.map((item) => item.id))).toEqual([["t"], ["y"], ["o"]])
   })
 })

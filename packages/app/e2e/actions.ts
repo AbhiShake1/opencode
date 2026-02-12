@@ -17,6 +17,7 @@ import {
   listItemKeyStartsWithSelector,
   workspaceItemSelector,
   workspaceMenuTriggerSelector,
+  sidebarThreadControlsSelector,
 } from "./selectors"
 import type { createSdk } from "./utils"
 
@@ -383,6 +384,16 @@ export async function openProjectMenu(page: Page, projectSlug: string) {
   const x = viewport ? Math.max(viewport.width - 5, 0) : 1200
   const y = viewport ? Math.max(viewport.height - 5, 0) : 800
   await page.mouse.move(x, y)
+  return menu
+}
+
+export async function openSidebarThreadMenu(page: Page) {
+  const trigger = page.locator(sidebarThreadControlsSelector).first()
+  await expect(trigger).toBeVisible()
+  await trigger.click({ force: true })
+
+  const menu = page.locator(dropdownMenuContentSelector).first()
+  await expect(menu).toBeVisible()
   return menu
 }
 

@@ -50,6 +50,9 @@ type TabHandoff = {
 export type LocalProject = Partial<Project> & { worktree: string; expanded: boolean }
 
 export type ReviewDiffStyle = "unified" | "split"
+export type SidebarOrganizeMode = "by_project" | "chronological"
+export type SidebarSortMode = "created_desc" | "updated_desc"
+export type SidebarFilterMode = "all" | "relevant"
 
 export function ensureSessionKey(key: string, touch: (key: string) => void, seed: (key: string) => void) {
   touch(key)
@@ -165,6 +168,10 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
           width: DEFAULT_PANEL_WIDTH,
           workspaces: {} as Record<string, boolean>,
           workspacesDefault: false,
+          organize: "by_project" as SidebarOrganizeMode,
+          sort: "updated_desc" as SidebarSortMode,
+          filter: "all" as SidebarFilterMode,
+          archived: false,
         },
         terminal: {
           height: DEFAULT_TERMINAL_HEIGHT,
@@ -530,6 +537,25 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
         width: createMemo(() => store.sidebar.width),
         resize(width: number) {
           setStore("sidebar", "width", width)
+        },
+        organize: createMemo(() => store.sidebar.organize ?? "by_project"),
+        setOrganize(value: SidebarOrganizeMode) {
+          setStore("sidebar", "organize", value)
+        },
+        sort: createMemo(() => store.sidebar.sort ?? "updated_desc"),
+        setSort(value: SidebarSortMode) {
+          setStore("sidebar", "sort", value)
+        },
+        filter: createMemo(() => store.sidebar.filter ?? "all"),
+        setFilter(value: SidebarFilterMode) {
+          setStore("sidebar", "filter", value)
+        },
+        archived: createMemo(() => store.sidebar.archived ?? false),
+        showArchived() {
+          setStore("sidebar", "archived", true)
+        },
+        showActive() {
+          setStore("sidebar", "archived", false)
         },
         workspaces(directory: string) {
           return () => store.sidebar.workspaces[directory] ?? store.sidebar.workspacesDefault ?? false

@@ -37,6 +37,14 @@ export const popoverBodySelector = '[data-slot="popover-body"]'
 export const dropdownMenuTriggerSelector = '[data-slot="dropdown-menu-trigger"]'
 
 export const dropdownMenuContentSelector = '[data-component="dropdown-menu-content"]'
+export const sidebarThreadControlsSelector = '[data-action="sidebar-thread-controls"]'
+export const sidebarThreadOrganizeSelector = (value: "by_project" | "chronological") =>
+  `[data-action="sidebar-thread-organize"][data-value="${value}"]`
+export const sidebarThreadSortSelector = (value: "updated_desc" | "created_desc") =>
+  `[data-action="sidebar-thread-sort"][data-value="${value}"]`
+export const sidebarThreadFilterSelector = (value: "all" | "relevant") =>
+  `[data-action="sidebar-thread-filter"][data-value="${value}"]`
+export const sidebarThreadArchivedToggleSelector = '[data-action="sidebar-thread-archived-toggle"]'
 
 export const inlineInputSelector = '[data-component="inline-input"]'
 
